@@ -94,21 +94,26 @@ async function populateCameraList() {
         });
 
         // Smart Selection Logic:
-        // Iriun often creates dummy virtual slots like "Iriun Webcam #2" or "#3"
-        // We MUST prioritize the primary base "Iriun Webcam" to receive actual video.
+        // Prioritize the base "Iriun Webcam" over dummy slots (#2, #3, etc.)
+        // Also: Explicitly demote common built-in webcam labels to prevent takeover.
         let selectedIndex = 0;
         if (iriunIndices.length > 0) {
             let primaryIndex = iriunIndices.find(idx => {
-                const label = elements.cameraSelect.options[idx].text.toLowerCase();
+                const label = elements.cameraSelect.options[idx]?.text.toLowerCase() || "";
                 return label.includes('iriun') && !label.includes('#');
             });
 
-            // If a base Iriun isn't found, fallback to the first available Iriun slot
             selectedIndex = primaryIndex !== undefined ? primaryIndex : iriunIndices[0];
         }
 
-        elements.cameraSelect.selectedIndex = selectedIndex;
-        console.log(`[CameraSelector] Found ${videoDevices.length} camera(s). Iriun count: ${iriunIndices.length}. Using: ${elements.cameraSelect.options[selectedIndex].text}`);
+        // ⚠️ CRITICAL: Force set the index if an Iriun camera just appeared
+        // This stops the desktop webcam from staying active if you connect your phone
+        const currentlyUsingIriun = elements.cameraSelect.options[elements.cameraSelect.selectedIndex]?.text.toLowerCase().includes('iriun');
+        if (iriunIndices.length > 0 && !currentlyUsingIriun) {
+            elements.cameraSelect.selectedIndex = selectedIndex;
+        }
+
+        console.log(`[CameraSelector] Found ${videoDevices.length} camera(s). Iriun count: ${iriunIndices.length}. Using: ${elements.cameraSelect.options[elements.cameraSelect.selectedIndex].text}`);
 
         return iriunIndices.length > 0;
     } catch (err) {
@@ -120,15 +125,28 @@ async function populateCameraList() {
 /**
  * Open a camera stream using the currently selected device.
  */
-async function openSelectedCameraStream() {
+async function openSelectedCameraStream(retryWithFallback = true) {
     const selectedDeviceId = elements.cameraSelect.value;
+    const isIriunSelected = elements.cameraSelect.options[elements.cameraSelect.selectedIndex]?.text.toLowerCase().includes('iriun');
 
-    const constraints = selectedDeviceId
-        ? { video: { deviceId: { exact: selectedDeviceId } }, audio: false }
-        : { video: { facingMode: 'environment' }, audio: false };
+    // BUILD CONSTRAINTS
+    // Use 'exact' for deviceId to force the browser to pick the virtual camera,
+    // but we use fallback if it fails.
+    const constraints = {
+        audio: false,
+        video: {
+            deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        }
+    };
+
+    if (!selectedDeviceId) {
+        constraints.video.facingMode = "environment";
+    }
 
     try {
-        console.log(`[Camera] Requesting stream for device: ${selectedDeviceId || 'default'}`);
+        console.log(`[Camera] Requesting stream for device (EXACT): ${selectedDeviceId || 'default'}`);
         stream = await navigator.mediaDevices.getUserMedia(constraints);
 
         elements.sourceVideo.srcObject = stream;
@@ -141,47 +159,58 @@ async function openSelectedCameraStream() {
                 elements.sourceVideo.play().then(() => {
                     updateUIState('ready');
 
-                    // --- Stream Health Monitor for Wi-Fi Drops ---
+                    // --- 📱 SMART BLACK-SCREEN VALIDATION ---
+                    // Virtual drivers like Iriun can "connect" but send 0-pixel/black blank data
+                    // We wait 2.5s, then sample a pixel to ensure it's not a dummy slot.
+                    setTimeout(() => {
+                        if (!stream || !stream.active) return;
+                        const v = elements.sourceVideo;
+
+                        // Fail on zero resolution
+                        if (v.videoWidth === 0 || v.videoHeight === 0) {
+                            console.warn("⚠️ Dummy Iriun detected (0 resolution). Auto-switching...");
+                            tryNextIriunSwitch();
+                            return;
+                        }
+
+                        // Fail on pure black screen
+                        const canvas = document.createElement('canvas');
+                        canvas.width = 10; canvas.height = 10;
+                        const ctx = canvas.getContext('2d');
+                        try {
+                            ctx.drawImage(v, 0, 0, 10, 10);
+                            const data = ctx.getImageData(0, 0, 10, 10).data;
+                            const isBlack = !data.some(c => c > 10); // Check if any pixel has color
+                            if (isBlack && isIriunSelected) {
+                                console.warn("⚠️ Black Iriun feed detected. Auto-switching...");
+                                tryNextIriunSwitch();
+                            }
+                        } catch (e) { /* Canvas taint/security might occur if cross-origin, ignore */ }
+                    }, 2500);
+
+                    // --- Stream Health Monitor ---
                     const videoTrack = stream.getVideoTracks()[0];
                     if (videoTrack) {
                         videoTrack.onended = () => {
-                            console.warn("⚠️ Camera track ended unexpectedly (Wi-Fi drop?). Auto-restarting...");
                             if (currentMode === 'camera') setTimeout(() => openSelectedCameraStream(), 1000);
                         };
                         videoTrack.onmute = () => {
-                            console.warn("⚠️ Camera track muted (Virtual driver disconnected?). Auto-restarting...");
                             if (currentMode === 'camera') setTimeout(() => openSelectedCameraStream(), 2000);
                         };
                     }
-
                     resolve(true);
                 }).catch(reject);
             };
             elements.sourceVideo.onerror = (err) => {
                 reject(new Error("Video element error: " + err.message));
             };
-            // Safety timeout
             setTimeout(() => reject(new Error("Camera metadata timeout")), 8000);
         });
     } catch (err) {
         console.error('[Camera] Error in openSelectedCameraStream:', err);
-
-        let userMessage = 'Could not access camera.';
-        if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-            userMessage = 'Camera is already in use by another application (e.g., Zoom, Teams, or another tab). Please close other apps and try again.';
-        } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-            userMessage = 'Camera permission denied. Please enable camera access in your browser settings.';
-        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-            userMessage = 'No camera found. Please ensure your camera is connected.';
-        } else if (err.message) {
-            userMessage += ' ' + err.message;
-        }
-
+        let userMessage = 'Could not access camera: ' + err.message;
         stopMedia();
         updateUIState('idle');
-        if (elements.cameraStatusIndicator) {
-            elements.cameraStatusIndicator.classList.add('error');
-        }
         alert(userMessage);
         throw err;
     }
@@ -751,6 +780,37 @@ function stopAnalysis() {
     if (window.PerceptionEngine) {
         window.PerceptionEngine.stop();
     }
+}
+
+/**
+ * Fallback logic to jump between Iriun Webcam #1, #2, #3 if current is black
+ */
+async function tryNextIriunSwitch() {
+    const selector = elements.cameraSelect;
+    const currentIndex = selector.selectedIndex;
+
+    // Find all Iriun indices
+    let iriunIndices = [];
+    for (let i = 0; i < selector.options.length; i++) {
+        if (selector.options[i].text.toLowerCase().includes('iriun')) {
+            iriunIndices.push(i);
+        }
+    }
+
+    if (iriunIndices.length <= 1) {
+        console.warn("No alternative Iriun slot found. Sticking with current.");
+        return;
+    }
+
+    // Move to next available index in the Iriun list
+    const pos = iriunIndices.indexOf(currentIndex);
+    const nextIndex = iriunIndices[(pos + 1) % iriunIndices.length];
+
+    selector.selectedIndex = nextIndex;
+    console.log(`[Self-Heal] Auto-switching to alternative Iriun entry: ${selector.options[nextIndex].text}`);
+
+    stopMedia();
+    await openSelectedCameraStream();
 }
 
 // Resize canvas when window resizes

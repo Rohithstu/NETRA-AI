@@ -104,12 +104,22 @@ ik_private = os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip().strip('"').strip("'")
 ik_endpoint = os.getenv("IMAGEKIT_PUBLIC_ENDPOINT", "").strip().strip('"').strip("'")
 
 imagekit = None
-if ik_public and ik_private and ik_endpoint:
+if ik_private and ik_endpoint:
     try:
-        imagekit = ImageKit(public_key=ik_public, private_key=ik_private, url_endpoint=ik_endpoint)
-        print("✅ ImageKit initialized successfully.")
+        # Compatibility for version 5+ of imagekitio
+        imagekit = ImageKit(private_key=ik_private, base_url=ik_endpoint)
+        print("✅ ImageKit initialized successfully (v5).")
+    except TypeError:
+        # Compatibility for legacy versions
+        try:
+            imagekit = ImageKit(public_key=ik_public, private_key=ik_private, url_endpoint=ik_endpoint)
+            print("✅ ImageKit initialized successfully (legacy).")
+        except Exception as e:
+            print(f"⚠️ ImageKit init failed: {e}")
+            imagekit = None
     except Exception as e:
         print(f"⚠️ ImageKit init failed: {e}")
+        imagekit = None
 
 print(f"📦 Storage & Database: {'Enabled' if events_collection is not None and imagekit is not None else 'Partially Enabled'}")
 

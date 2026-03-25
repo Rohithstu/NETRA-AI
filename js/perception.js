@@ -245,12 +245,12 @@ class PerceptionEngine {
     connectToCore() {
         if (this.socket && this.socket.readyState <= 1) return;
 
-        console.log("Connecting to Netra Core Server (ws://localhost:8001/ws/vision)...");
+        console.log("Connecting to Netra Core Server (ws://127.0.0.1:8001/ws/vision)...");
         if (this.coreStatusEl) {
             this.coreStatusEl.className = 'core-status connecting';
         }
 
-        this.socket = new WebSocket('ws://localhost:8001/ws/vision');
+        this.socket = new WebSocket('ws://127.0.0.1:8001/ws/vision');
 
         this.socket.onopen = () => {
             console.log("✅ Connected to Netra Core Server.");
