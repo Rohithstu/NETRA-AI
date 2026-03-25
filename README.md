@@ -131,6 +131,7 @@ pip install -r requirements.txt
 
 # Start backend server
 python netra_server.py
+C:\Users\Venu\AppData\Local\Programs\Python\Python311\python.exe netra_server.py
 ```
 
 ### 3. Activate Netra
