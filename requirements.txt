@@ -1,0 +1,16 @@
+opencv-python
+numpy
+fastapi
+uvicorn
+torch
+torchvision
+torchaudio
+ultralytics
+fer
+mediapipe
+facenet-pytorch
+python-dotenv
+python-multipart
+boto3
+tqdm
+mtcnn
