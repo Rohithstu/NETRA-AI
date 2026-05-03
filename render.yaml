@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: netra-ai
+    env: docker
+    dockerContext: .
+    dockerfilePath: Dockerfile
+    plan: starter # ML apps need at least starter plan for RAM
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: IMAGEKIT_PUBLIC_KEY
+        sync: false
+      - key: IMAGEKIT_PRIVATE_KEY
+        sync: false
+      - key: IMAGEKIT_PUBLIC_ENDPOINT
+        sync: false
+
